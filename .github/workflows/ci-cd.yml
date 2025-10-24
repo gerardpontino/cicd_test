@@ -1,0 +1,42 @@
+name: K3s Cluster Provisioning with Ansible
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:  # allows manual trigger from GitHub UI
+
+jobs:
+  provision:
+    name: Provision K3s Cluster in Multipass
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Ensure Ansible is installed
+        run: |
+          if ! command -v ansible &> /dev/null; then
+            echo "Installing Ansible..."
+            brew install ansible
+          else
+            echo "✅ Ansible already installed"
+          fi
+
+      - name: Ensure Multipass is available
+        run: |
+          if ! command -v multipass &> /dev/null; then
+            echo "❌ Multipass not found. Please install it on the runner Mac."
+            exit 1
+          fi
+          echo "✅ Multipass is ready: $(multipass version | head -n 1)"
+
+      - name: Run Ansible Playbook to Provision K3s
+        run: |
+          echo "🚀 Starting K3s provisioning..."
+          ansible-playbook ansible/provision-k3s.yml
+
+      - name: Verify K3s Cluster Nodes
+        run: |
+          echo "🔍 Checking K3s cluster nodes..."
+          multipass exec k3s-master -- kubectl get nodes -o wide || echo "Cluster not ready yet"
