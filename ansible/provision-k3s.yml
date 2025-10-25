@@ -7,8 +7,10 @@
   tasks:
     - name: Check and delete existing master and worker nodes if they exist
       shell: |
-        multipass list --format csv | grep 'k3s-' | cut -d',' -f1 | xargs -I {} multipass delete {} || true
-        multipass purge
+        if multipass list | grep -q 'k3s-master'; then multipass delete k3s-master; multipass purge; fi
+        {% for i in range(1, worker_count + 1) %}
+        if multipass list | grep -q 'k3s-worker-{{ '%02d' % i }}'; then multipass delete k3s-worker-{{ '%02d' % i }}; multipass purge; fi
+        {% endfor %}
       ignore_errors: true
 
     - name: Provision master node (k3s-master)
@@ -17,9 +19,9 @@
       register: master_provision
 
     - name: Provision worker nodes dynamically
-      shell: |
-        multipass launch --name k3s-worker-{{ item }} --cpus 1 --memory 1G --disk 4G
       loop: "{{ range(1, worker_count + 1) | list }}"
+      shell: |
+        multipass launch --name k3s-worker-{{ '%02d' % item }} --cpus 1 --memory 1G --disk 4G
       register: worker_provision
 
     - name: Wait for instances to be ready
@@ -39,8 +41,8 @@
         msg: "Master node IP: {{ master_ip.stdout }}"
 
     - name: Get worker node IP addresses
-      shell: multipass info k3s-worker-{{ item }} | grep IPv4 | awk '{print $2}'
       loop: "{{ range(1, worker_count + 1) | list }}"
+      shell: multipass info k3s-worker-{{ '%02d' % item }} | grep IPv4 | awk '{print $2}'
       register: worker_ips
       changed_when: false
 
@@ -48,10 +50,9 @@
       debug:
         msg: "Worker node IPs: {{ worker_ips.results | map(attribute='stdout') | list }}"
 
-    - name: Install k3s on the master node (k3s-master)
+    - name: Install k3s on the master node
       shell: |
-        multipass exec k3s-master -- bash -c \
-        "curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='--write-kubeconfig-mode 644 --disable traefik --disable-network-policy --disable servicelb' sh -"
+        multipass exec k3s-master -- bash -c "curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='--write-kubeconfig-mode 644 --disable traefik --disable-network-policy --disable servicelb' sh -"
       register: master_k3s
 
     - name: Get K3s master token
@@ -60,10 +61,9 @@
       changed_when: false
 
     - name: Install k3s agent on worker nodes dynamically
-      shell: |
-        multipass exec k3s-worker-{{ item }} -- bash -c \
-        "curl -sfL https://get.k3s.io | K3S_URL=https://{{ master_ip.stdout }}:6443 K3S_TOKEN={{ k3s_token.stdout }} sh -"
       loop: "{{ range(1, worker_count + 1) | list }}"
+      shell: |
+        multipass exec k3s-worker-{{ '%02d' % item }} -- bash -c "curl -sfL https://get.k3s.io | K3S_URL=https://{{ master_ip.stdout }}:6443 K3S_TOKEN={{ k3s_token.stdout }} sh -"
       register: worker_k3s
 
     - name: Verify nodes are added to the K3s cluster
@@ -78,7 +78,7 @@
       command: multipass exec k3s-master -- sudo cat /etc/rancher/k3s/k3s.yaml
       register: kubeconfig_output
 
-    - name: Get Master Node IP
+    - name: Get Master Node IP again
       shell: multipass info k3s-master | grep IPv4 | awk '{print $2}'
       register: master_ip_output
 
@@ -104,12 +104,11 @@
         regexp: '^(\s*server:\s*)https://.*'
         line: "    server: https://{{ master_ip }}:6443"
         backup: yes
-      when: master_ip is defined and master_ip != ""
 
-    - name: Display final Kubeconfig content
+    - name: Display final Kubeconfig
       command: cat ~/.kube/config
       register: kubeconfig_final
 
-    - name: Debug final Kubeconfig
+    - name: Debug final Kubeconfig content
       debug:
         var: kubeconfig_final.stdout
