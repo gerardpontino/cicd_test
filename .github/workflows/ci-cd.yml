@@ -35,13 +35,11 @@ jobs:
             exit 1
           fi
           echo "Multipass is ready: $(multipass version | head -n 1)"
-
       - name: Run Ansible Playbook to Provision K3s
         run: |
-          echo "🚀 Starting K3s provisioning..."
           ansible-playbook ansible/provision-k3s.yml -e "worker_count=${{ env.worker_count }}"
         env:
-          worker_count: 3   # You can change this number anytime (e.g., 1, 2, 5)
+          worker_count: 3  # Change this number to scale workers
 
       - name: Verify K3s Cluster Nodes
         run: |
