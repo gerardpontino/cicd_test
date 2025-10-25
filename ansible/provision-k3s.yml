@@ -23,12 +23,11 @@
     - name: Provision worker nodes dynamically
       loop: "{{ range(1, worker_count + 1) | list }}"
       shell: |
-        multipass launch --name k3s-worker-{{ item | string | format('%02d') }} --cpus 1 --memory 1G --disk 4G
+        multipass launch --name k3s-worker-{{ '%02d' | format(item) }} --cpus 1 --memory 1G --disk 4G
       register: worker_provision
 
     - name: Wait for all instances to be ready
-      shell: |
-        multipass list
+      shell: multipass list
       register: instances
       until: instances.stdout.find('Running') != -1
       retries: 10
@@ -51,11 +50,10 @@
     - name: Install k3s agent on worker nodes
       loop: "{{ range(1, worker_count + 1) | list }}"
       shell: |
-        multipass exec k3s-worker-{{ item | string | format('%02d') }} -- bash -c "curl -sfL https://get.k3s.io | K3S_URL=https://{{ master_ip.stdout }}:6443 K3S_TOKEN={{ k3s_token.stdout }} sh -"
+        multipass exec k3s-worker-{{ '%02d' | format(item) }} -- bash -c "curl -sfL https://get.k3s.io | K3S_URL=https://{{ master_ip.stdout }}:6443 K3S_TOKEN={{ k3s_token.stdout }} sh -"
 
     - name: Verify nodes are added to the K3s cluster
-      shell: |
-        multipass exec k3s-master -- kubectl get nodes
+      shell: multipass exec k3s-master -- kubectl get nodes
       register: nodes_status
 
     - name: Display K3s cluster nodes
@@ -63,7 +61,7 @@
         msg: "{{ nodes_status.stdout }}"
 
     - name: Retrieve kubeconfig from k3s-master
-      command: multipass exec k3s-master -- sudo cat /etc/rancher/k3s/k3s.yaml
+      shell: multipass exec k3s-master -- sudo cat /etc/rancher/k3s/k3s.yaml
       register: kubeconfig_output
 
     - name: Ensure ~/.kube directory exists
