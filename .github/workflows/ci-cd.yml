@@ -4,6 +4,11 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch:  # allows manual trigger from GitHub UI
+    inputs:
+      worker_count:
+        description: "Number of worker nodes to create"
+        required: true
+        default: "3"
 
 jobs:
   provision:
@@ -34,7 +39,8 @@ jobs:
       - name: Run Ansible Playbook to Provision K3s
         run: |
           echo "🚀 Starting K3s provisioning..."
-          ansible-playbook ansible/provision-k3s.yml
+          ansible-playbook ansible/provision-k3s.yml \
+            -e "worker_count=${{ github.event.inputs.worker_count }}"
 
       - name: Verify K3s Cluster Nodes
         run: |
