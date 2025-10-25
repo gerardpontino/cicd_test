@@ -1,0 +1,69 @@
+---
+- name: Scale K3s worker nodes dynamically
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    master_name: k3s-master
+    worker_prefix: k3s-worker-
+    worker_count: 3  # You can override this when you run the playbook
+
+  tasks:
+    - name: Get existing worker nodes
+      shell: multipass list --format csv | grep "{{ worker_prefix }}" | cut -d, -f1
+      register: existing_workers
+      changed_when: false
+
+    - name: Set existing worker node list
+      set_fact:
+        existing_nodes: "{{ existing_workers.stdout_lines }}"
+
+    - name: Calculate desired worker node names
+      set_fact:
+        desired_nodes: "{{ query('sequence', 'start=1 end=' + worker_count|string, 'format=' + worker_prefix + '%02d') }}"
+
+    - name: Determine nodes to create
+      set_fact:
+        nodes_to_create: "{{ desired_nodes | difference(existing_nodes) }}"
+
+    - name: Determine nodes to delete
+      set_fact:
+        nodes_to_delete: "{{ existing_nodes | difference(desired_nodes) }}"
+
+    - name: Delete extra worker nodes
+      when: nodes_to_delete | length > 0
+      shell: |
+        multipass delete {{ item }} --purge
+      loop: "{{ nodes_to_delete }}"
+      ignore_errors: true
+
+    - name: Provision new worker nodes
+      when: nodes_to_create | length > 0
+      shell: |
+        multipass launch --name {{ item }} --cpus 1 --memory 1G --disk 4G
+      loop: "{{ nodes_to_create }}"
+
+    - name: Get K3s master IP
+      shell: multipass info {{ master_name }} | grep IPv4 | awk '{print $2}'
+      register: master_ip
+      changed_when: false
+
+    - name: Get K3s token from master
+      shell: multipass exec {{ master_name }} -- sudo cat /var/lib/rancher/k3s/server/node-token
+      register: k3s_token
+      changed_when: false
+
+    - name: Join new workers to the cluster
+      when: nodes_to_create | length > 0
+      shell: |
+        multipass exec {{ item }} -- bash -c "curl -sfL https://get.k3s.io | K3S_URL=https://{{ master_ip.stdout }}:6443 K3S_TOKEN={{ k3s_token.stdout }} sh -"
+      loop: "{{ nodes_to_create }}"
+
+    - name: Verify current cluster nodes
+      shell: multipass exec {{ master_name }} -- kubectl get nodes
+      register: nodes_status
+
+    - name: Display K3s cluster nodes
+      debug:
+        msg: "{{ nodes_status.stdout }}"
