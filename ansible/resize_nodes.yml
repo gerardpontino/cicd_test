@@ -1,0 +1,13 @@
+worker_nodes:
+  - name: k3s-worker-01
+    cpus: 2
+    memory: 2G
+    disk: 8G
+  - name: k3s-worker-02
+    cpus: 1
+    memory: 1G
+    disk: 6G
+  - name: k3s-worker-03
+    cpus: 1
+    memory: 1G
+    disk: 6G
