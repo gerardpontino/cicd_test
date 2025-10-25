@@ -1,15 +1,14 @@
 ---
 - hosts: localhost
+  vars:
+    # Default number of worker nodes (can be overridden via -e "worker_count=<n>")
+    worker_count: "{{ worker_count | default(3) | int }}"
+
   tasks:
     - name: Check and delete existing master and worker nodes if they exist
       shell: |
-        if multipass list | grep -q 'k3s-master'; then multipass delete k3s-master; multipass purge; fi
-        if multipass list | grep -q 'k3s-worker-1'; then multipass delete k3s-worker-1; multipass purge; fi
-        if multipass list | grep -q 'k3s-worker-01'; then multipass delete k3s-worker-01; multipass purge; fi
-        if multipass list | grep -q 'k3s-worker-2'; then multipass delete k3s-worker-2; multipass purge; fi
-        if multipass list | grep -q 'k3s-worker-02'; then multipass delete k3s-worker-02; multipass purge; fi
-        if multipass list | grep -q 'k3s-worker-3'; then multipass delete k3s-worker-3; multipass purge; fi
-        if multipass list | grep -q 'k3s-worker-03'; then multipass delete k3s-worker-03; multipass purge; fi
+        multipass list --format csv | grep 'k3s-' | cut -d',' -f1 | xargs -I {} multipass delete {} || true
+        multipass purge
       ignore_errors: true
 
     - name: Provision master node (k3s-master)
@@ -17,18 +16,14 @@
         multipass launch --name k3s-master --cpus 2 --memory 4G --disk 20G
       register: master_provision
 
-    - name: Provision worker nodes (k3s-worker-01, k3s-worker-02, k3s-worker-03)
-      loop:
-        - 01
-        - 02
-        - 03
+    - name: Provision worker nodes dynamically
       shell: |
         multipass launch --name k3s-worker-{{ item }} --cpus 1 --memory 1G --disk 4G
+      loop: "{{ range(1, worker_count + 1) | list }}"
       register: worker_provision
 
     - name: Wait for instances to be ready
-      shell: |
-        multipass list
+      shell: multipass list
       register: instances
       until: instances.stdout.find('Running') != -1
       retries: 10
@@ -44,11 +39,8 @@
         msg: "Master node IP: {{ master_ip.stdout }}"
 
     - name: Get worker node IP addresses
-      loop:
-        - 01
-        - 02
-        - 03
       shell: multipass info k3s-worker-{{ item }} | grep IPv4 | awk '{print $2}'
+      loop: "{{ range(1, worker_count + 1) | list }}"
       register: worker_ips
       changed_when: false
 
@@ -58,32 +50,30 @@
 
     - name: Install k3s on the master node (k3s-master)
       shell: |
-        multipass exec k3s-master -- bash -c "curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='--write-kubeconfig-mode 644 --disable traefik --disable-network-policy --disable servicelb' sh -"
+        multipass exec k3s-master -- bash -c \
+        "curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='--write-kubeconfig-mode 644 --disable traefik --disable-network-policy --disable servicelb' sh -"
       register: master_k3s
 
     - name: Get K3s master token
-      shell: |
-        multipass exec k3s-master -- sudo cat /var/lib/rancher/k3s/server/node-token
+      shell: multipass exec k3s-master -- sudo cat /var/lib/rancher/k3s/server/node-token
       register: k3s_token
       changed_when: false
 
-    - name: Install k3s agent on worker nodes (k3s-worker-01, k3s-worker-02, k3s-worker-03)
-      loop:
-        - 01
-        - 02
-        - 03
+    - name: Install k3s agent on worker nodes dynamically
       shell: |
-        multipass exec k3s-worker-{{ item }} -- bash -c "curl -sfL https://get.k3s.io | K3S_URL=https://{{ master_ip.stdout }}:6443 K3S_TOKEN={{ k3s_token.stdout }} sh -"
+        multipass exec k3s-worker-{{ item }} -- bash -c \
+        "curl -sfL https://get.k3s.io | K3S_URL=https://{{ master_ip.stdout }}:6443 K3S_TOKEN={{ k3s_token.stdout }} sh -"
+      loop: "{{ range(1, worker_count + 1) | list }}"
       register: worker_k3s
 
     - name: Verify nodes are added to the K3s cluster
-      shell: |
-        multipass exec k3s-master -- kubectl get nodes
+      shell: multipass exec k3s-master -- kubectl get nodes
       register: nodes_status
 
     - name: Display K3s cluster nodes
       debug:
         msg: "K3s cluster nodes: {{ nodes_status.stdout }}"
+
     - name: Retrieve Kubeconfig from k3s-master
       command: multipass exec k3s-master -- sudo cat /etc/rancher/k3s/k3s.yaml
       register: kubeconfig_output
@@ -92,17 +82,9 @@
       shell: multipass info k3s-master | grep IPv4 | awk '{print $2}'
       register: master_ip_output
 
-    - name: Debug Master Node IP Output
-      debug:
-        var: master_ip_output.stdout
-
     - name: Set Master IP variable
       set_fact:
         master_ip: "{{ master_ip_output.stdout.strip() }}"
-
-    - name: Debug Master IP Variable
-      debug:
-        msg: "Master Node IP: {{ master_ip }}"
 
     - name: Ensure .kube directory exists
       file:
@@ -124,10 +106,10 @@
         backup: yes
       when: master_ip is defined and master_ip != ""
 
-    - name: Debug Kubeconfig
+    - name: Display final Kubeconfig content
       command: cat ~/.kube/config
       register: kubeconfig_final
 
-    - name: Display final Kubeconfig content
+    - name: Debug final Kubeconfig
       debug:
         var: kubeconfig_final.stdout
